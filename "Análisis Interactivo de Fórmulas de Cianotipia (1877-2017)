@@ -1,0 +1,154 @@
+# -----------------------------------------------------------------------------
+# Cargar las librerías necesarias
+# -----------------------------------------------------------------------------
+library(shiny)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(tibble)
+library(stringr)
+
+# -----------------------------------------------------------------------------
+# Definición de la Interfaz de Usuario (UI)
+# -----------------------------------------------------------------------------
+ui <- fluidPage(
+  titlePanel("Análisis Interactivo de Fórmulas de Cianotipia (1877-2017)"),
+  fluidRow(
+    # Columna para el gráfico principal y el slider
+    column(7,
+           plotOutput("distPlot", height = "600px"),
+           # Slider para controlar la línea vertical
+           sliderInput("year_slider", 
+                       label = "Arrastra para explorar por año:",
+                       min = 1877, 
+                       max = 2017, 
+                       value = 1945, 
+                       step = 1,
+                       sep = "", # Sin separador de miles
+                       animate = animationOptions(interval = 300, loop = FALSE),
+                       width = '100%')
+    ),
+    
+    # Columna para todos los paneles de información
+    column(5,
+           h4("Detalles del Punto Seleccionado"),
+           verbatimTextOutput("selectedInfo"),
+           hr(),
+           h4("Proporción de Químicos en la Fórmula Original"),
+           plotOutput("proportionPlot", height = "120px"),
+           hr(),
+           h4("Calculadora para Lotes Pequeños"),
+           p("Calcula los gramos necesarios asumiendo que la fórmula original es para 100ml de cada solución.", style = "font-size: 90%; color: #555;"),
+           numericInput("volumen_calculadora", "Volumen final por solución (ml):", value = 10, min = 1, max = 1000, width = '200px'),
+           uiOutput("calculadora_resultado")
+    )
+  )
+)
+
+# -----------------------------------------------------------------------------
+# Definición de la Lógica del Servidor (Server)
+# -----------------------------------------------------------------------------
+server <- function(input, output, session) {
+  
+  # 1. Datos
+  datos_quimicos <- tribble(
+    ~Referencia, ~FAC, ~PF,
+    "1877 Ref 1", 29.0, 26.0, "1877 Ref 21", 32.0, 14.0, "1881 Ref 2", 20.0, 16.0, "1881 Ref 13", 31.0, 13.0, "1882 Ref 30", 29.0, 20.0, "1885 Ref 31", 14.0, 12.0, "1887 Ref 25", 44.0, 27.0, "1888 Ref 14", 29.0, 26.0, "1890 Ref 4", 28.0, 17.0, "1890 Ref 18", 25.0, 21.0, "1891 Ref 7", 25.0, 14.0, "1891 Ref 3", 17.0, 17.0, "1892 Ref 19", 36.0, 3.0, "1893 Ref 35", 25.0, 20.0, "1895 Ref 20", 25.0, 25.0, "1896 Ref 11", 22.0, 19.0, "1897 Ref 29", 31.0, 22.0, "1898 Ref 28", 25.0, 10.0, "1899 Ref 15", 20.0, 20.0, "1900 Ref 22", 36.0, 28.0, "1901 Ref 33", 25.0, 25.0, "1902 Ref 9", 25.0, 12.0, "1905 Ref 17", 36.0, 29.0, "1910 Ref 34", 25.0, 25.0, "1911 Ref 32", 31.0, 10.0, "1915 Ref 8", 25.0, 21.0, "1920 Ref 23", 20.0, 17.0, "1922 Ref 24", 25.0, 25.0, "1923 Ref 5", 16.0, 5.0, "1925 Ref 27", 37.0, 22.0, "1930 Ref 16", 25.0, 25.0, "1938 Ref 6", 29.0, 12.0, "1940 Ref 10", 25.0, 10.0, "1942 Ref 12", 15.0, 6.0, "1943 Ref 26", 38.0, 22.0, "1945 Herschel", 20.0, 16.0, "1950 Ware", 25.0, 25.0, "1960 NBP", 20.0, 8.0, "1968 SBP", 20.0, 12.0, "1970 Sullivan", 20.0, 20.0, "1980 Blacklow", 20.0, 10.0, "1985 Ware", 25.0, 10.0, "1990 Burkholder", 25.0, 10.0, "1993 Ware", 25.0, 7.0, "1995 King", 20.0, 20.0, "1999 James", 25.0, 10.0, "2000 Ware", 25.0, 10.0, "2001 Mele", 25.0, 12.0, "2002 Haper", 25.0, 12.0, "2003 Webb", 25.0, 10.0, "2004 Zipper", 25.0, 10.0, "2005 O’Brien", 25.0, 10.0, "2006 Arnow", 25.0, 15.0, "2008 NBP II", 25.0, 8.0, "2010 Diss", 25.0, 8.0, "2012 Davis", 25.0, 16.0, "2014 Celin", 20.0, 20.0, "2015 Anderson", 25.0, 6.0, "2016 Nelson", 25.0, 10.0, "2017 SAC", 25.0, 8.0
+  ) %>%
+    mutate(Anio = as.numeric(substr(Referencia, 1, 4)))
+  
+  datos_largos <- datos_quimicos %>%
+    pivot_longer(cols = c(FAC, PF), names_to = "Quimico", values_to = "Gramos") %>%
+    mutate(Quimico = case_when(
+      Quimico == "FAC" ~ "Citrato de Amonio Férrico (FAC)",
+      Quimico == "PF"  ~ "Ferricianuro de Potasio (PF)"
+    ))
+  
+  updateSliderInput(session, "year_slider", 
+                    min = min(datos_quimicos$Anio), 
+                    max = max(datos_quimicos$Anio))
+  
+  punto_seleccionado <- reactiveVal()
+  observe({
+    req(input$year_slider)
+    distancias <- abs(datos_quimicos$Anio - input$year_slider)
+    punto_inicial <- datos_quimicos[which.min(distancias), ]
+    punto_seleccionado(punto_inicial)
+  })
+  
+  observeEvent(input$year_slider, {
+    distancias <- abs(datos_quimicos$Anio - input$year_slider)
+    punto_cercano <- datos_quimicos[which.min(distancias), ]
+    punto_seleccionado(punto_cercano)
+  })
+  
+  # 3. Generar el gráfico principal
+  output$distPlot <- renderPlot({
+    p <- ggplot(datos_largos, aes(x = Anio, y = Gramos, color = Quimico, group = Quimico)) +
+      geom_line(linewidth = 1) + 
+      geom_point(size = 3) +
+      geom_vline(xintercept = input$year_slider, color = "tomato", linetype = "dashed", linewidth = 1) +
+      scale_color_manual(values = c("Citrato de Amonio Férrico (FAC)" = "#3ca547", "Ferricianuro de Potasio (PF)" = "#0d78c3")) +
+      theme_light(base_size = 14) +
+      labs(x = "Año", y = "Gramos", color = "Componente Químico") +
+      theme(legend.position = "top")
+    
+    # --- INICIO DE LA CORRECCIÓN ---
+    # Si hay un punto seleccionado, lo transformamos a formato largo para poder resaltarlo
+    if (!is.null(punto_seleccionado())) {
+      punto_a_resaltar <- punto_seleccionado() %>%
+        pivot_longer(cols = c(FAC, PF), names_to = "Quimico", values_to = "Gramos")
+      
+      # Agregamos la capa de resaltado usando los datos ya transformados
+      p <- p + geom_point(data = punto_a_resaltar, 
+                          aes(x = Anio, y = Gramos), 
+                          color = "red", size = 6, shape = 1, stroke = 1.5)
+    }
+    # --- FIN DE LA CORRECCIÓN ---
+    
+    p # Dibuja el gráfico
+  })
+  
+  # 4. Mostrar la información del punto seleccionado
+  output$selectedInfo <- renderText({
+    punto <- punto_seleccionado()
+    req(punto)
+    paste("Referencia:", punto$Referencia, "\nAño:", punto$Anio, "\nFAC:", punto$FAC, "g\nPF:", punto$PF, "g")
+  })
+  
+  # 5. Dibujar el panel de proporciones
+  output$proportionPlot <- renderPlot({
+    punto <- punto_seleccionado()
+    req(punto)
+    datos_proporcion <- tibble(
+      Quimico = factor(c("FAC", "PF"), levels = c("PF", "FAC")),
+      Gramos = c(punto$FAC, punto$PF)
+    )
+    ggplot(datos_proporcion, aes(x = 1, y = Gramos, fill = Quimico)) +
+      geom_col(width = 0.5, position = "stack") + coord_flip() +
+      scale_fill_manual(values = c("FAC" = "#3ca547", "PF" = "#0d78c3"), guide = "none") +
+      geom_text(aes(label = paste(Gramos, "g")), position = position_stack(vjust = 0.5), color = "white", fontface = "bold", size = 5) +
+      theme_void()
+  }, height = 100)
+  
+  # 6. Lógica de la calculadora
+  output$calculadora_resultado <- renderUI({
+    punto <- punto_seleccionado()
+    req(punto)
+    volumen_deseado <- input$volumen_calculadora
+    req(volumen_deseado)
+    
+    fac_calculado <- (punto$FAC / 100) * volumen_deseado
+    pf_calculado <- (punto$PF / 100) * volumen_deseado
+    
+    HTML(paste(
+      "<p><b>Solución A:</b>", round(fac_calculado, 2), "g de Citrato de Amonio Férrico</p>",
+      "<p><b>Solución B:</b>", round(pf_calculado, 2), "g de Ferricianuro de Potasio</p>"
+    ))
+  })
+}
+
+# -----------------------------------------------------------------------------
+# Ejecutar la aplicación
+# -----------------------------------------------------------------------------
+shinyApp(ui = ui, server = server)
